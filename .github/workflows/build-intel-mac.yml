@@ -1,0 +1,160 @@
+name: Build Intel Mac
+
+# 专门用于构建 Intel Mac 版本的 Workflow
+# 可以手动触发，无需等待 tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (例如: 4.1.5)'
+        required: true
+        default: '4.1.5'
+      upload_to_release:
+        description: '是否上传到 GitHub Release'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  VERSION: ${{ inputs.version }}
+  UPLOAD_TO_RELEASE: ${{ inputs.upload_to_release == 'true' }}
+
+jobs:
+  build-intel-mac:
+    name: Build Intel Mac (x86_64)
+    runs-on: macos-13  # Intel Mac Runner
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Install dependencies
+        run: |
+          npm install
+
+      - name: Build Intel Mac Version
+        id: build
+        env:
+          # 注意：如果你有签名证书，请设置这些 secrets
+          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🚀 开始构建 Intel Mac 版本..."
+          
+          # 设置 macOS 部署目标为 Intel
+          export CMAKE_OSX_ARCHS=x86_64
+          export CMAKE_OSX_DEPLOYMENT_TARGET=10.15
+          
+          # 执行构建
+          npm run tauri build -- --target x86_64-apple-darwin
+          
+          echo "✅ 构建完成！"
+          
+          # 显示构建产物
+          echo "📦 构建产物："
+          find src-tauri/target -name "*.dmg" -o -name "*.app.tar.gz" | head -20
+
+      - name: Verify Build
+        run: |
+          echo "🔍 验证构建产物..."
+          
+          # 查找 Intel Mac 构建产物
+          INTEL_DMG=$(find src-tauri/target -path "*x86_64*" -name "*.dmg" 2>/dev/null | head -1)
+          INTEL_APP=$(find src-tauri/target -path "*x86_64*" -name "*.app.tar.gz" 2>/dev/null | head -1)
+          
+          if [ -n "$INTEL_DMG" ]; then
+            echo "✅ 找到 DMG 安装包: $INTEL_DMG"
+            ls -lh "$INTEL_DMG"
+          elif [ -n "$INTEL_APP" ]; then
+            echo "✅ 找到 App tarball: $INTEL_APP"
+            ls -lh "$INTEL_APP"
+          else
+            echo "⚠️ 未找到预期的 Intel Mac 构建产物"
+            echo "📁 所有可能的构建产物："
+            find src-tauri/target -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.zip" 2>/dev/null | head -20
+          fi
+
+      - name: Upload as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Antigravity-Manager-Intel-Mac-v${{ env.VERSION }}
+          path: |
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/*.app.tar.gz
+            src-tauri/target/**/release/bundle/*.sig
+          compression-level: 9
+          retention-days: 7
+
+      - name: Upload to GitHub Release (Optional)
+        if: env.UPLOAD_TO_RELEASE == 'true'
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.VERSION }}-intel-mac
+          name: "Antigravity Tools v${{ env.VERSION }} (Intel Mac)"
+          body: |
+            ## Intel Mac 版本 (x86_64)
+            
+            **版本**: ${{ env.VERSION }}
+            **架构**: Intel Mac (x86_64)
+            **构建时间**: ${{ github.run_timestamp }}
+            
+            ### 安装说明
+            1. 下载 `.dmg` 文件
+            2. 双击打开并拖动到 Applications 文件夹
+            3. 首次打开时可能需要在终端执行：
+               ```bash
+               sudo xattr -rd com.apple.quarantine "/Applications/Antigravity Tools.app"
+               ```
+            
+            ### SHA256 校验
+            ```bash
+            shasum -a 256 Antigravity-Manager_*.dmg
+            ```
+          draft: false
+          prerelease: false
+          files: |
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/*.app.tar.gz
+            src-tauri/target/**/release/bundle/*.sig
+
+  summary:
+    name: Build Summary
+    needs: build-intel-mac
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## ✅ Intel Mac 构建任务完成" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**版本**: ${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**构建时间**: ${{ github.run_timestamp }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 构建产物" >> $GITHUB_STEP_SUMMARY
+          echo "- Intel Mac DMG 安装包" >> $GITHUB_STEP_SUMMARY
+          echo "- App tarball (备用)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 下一步" >> $GITHUB_STEP_SUMMARY
+          echo "1. 下载 Artifacts: 在 Actions 页面点击 Artifacts 下载" >> $GITHUB_STEP_SUMMARY
+          echo "2. 或重新运行并选择上传到 Release" >> $GITHUB_STEP_SUMMARY
